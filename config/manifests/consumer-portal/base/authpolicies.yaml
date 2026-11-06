@@ -50,7 +50,9 @@ spec:
         opa:
           allValues: true
           rego: |
-            allow = true
+            allow {
+              identity_safe
+            }
 
             login_location := sprintf("/oauth2/start?rd=%s", [urlquery.encode(input.context.request.http.path)])
 
@@ -90,6 +92,20 @@ spec:
               [_, claims, _] := io.jwt.decode(identity.id_token)
             } else = {}
 
+            # Group qualification and validation mirror celOIDCTransportGroups
+            # and oidc-groups-safe:
+            # https://github.com/opendatahub-io/models-as-a-service/blob/fdfdff2871b587e8bc48e222278131e8762cd199/maas-controller/pkg/controller/maas/maasauthpolicy_controller.go#L418-L421
+            # https://github.com/opendatahub-io/models-as-a-service/blob/fdfdff2871b587e8bc48e222278131e8762cd199/maas-controller/pkg/controller/maas/maasauthpolicy_controller.go#L1058-L1166
+            groups_header(groups, org_id) := header {
+              org_id != ""
+              qualified_groups := {sprintf("%s/%s", [org_id, group]) |
+                group := groups[_]
+              }
+              header := json.marshal(array.concat(["system:authenticated"], sort(qualified_groups)))
+            } else := header {
+              header := json.marshal(array.concat(["system:authenticated"], sort(groups)))
+            }
+
             identity = result {
               not input.auth.identity.anonymous
               claims := input.auth.identity
@@ -99,16 +115,9 @@ spec:
               ]
               username := usernames[0]
               authorization := input.context.request.http.headers.authorization
-              # MS-0007: groups are plain, unqualified names; they are
-              # forwarded as-is (trim/sort, system:authenticated prepended).
-              # TODO(MS-0007): the ADR is silent on the system:authenticated
-              # prepend and the sort/trim normalization — confirm whether the
-              # header should carry the literal groups claim instead.
-              groups := {trim_space(group) |
-                group := object.get(claims, "groups", [])[_]
-                trim_space(group) != ""
-                trim_space(group) != "system:authenticated"
-              }
+              org_id := object.get(claims, "org_id", "")
+              groups := object.get(claims, "groups", [])
+              # MS-0007: group names are qualified with the organization ID.
               result := {
                 "authenticated": true,
                 "authorization": authorization,
@@ -117,7 +126,8 @@ spec:
                 "id_token": trim_prefix(authorization, "Bearer "),
                 "username": username,
                 "email": object.get(claims, "email", ""),
-                "groups_header": json.marshal(array.concat(["system:authenticated"], sort(groups)))
+                "groups": groups,
+                "groups_header": groups_header(groups, org_id)
               }
             } else = result {
               input.auth.identity.anonymous
@@ -147,11 +157,9 @@ spec:
               ]
               username := usernames[0]
               token != ""
-              groups := {trim_space(group) |
-                group := split(object.get(response.headers, "x-auth-request-groups", [""])[0], ",")[_]
-                trim_space(group) != ""
-                trim_space(group) != "system:authenticated"
-              }
+              [_, claims, _] := io.jwt.decode(token)
+              org_id := object.get(claims, "org_id", "")
+              groups := object.get(claims, "groups", [])
               result := {
                 "authenticated": true,
                 # The verified token replaces any client-supplied value on
@@ -160,9 +168,52 @@ spec:
                 "id_token": token,
                 "username": username,
                 "email": object.get(response.headers, "x-auth-request-email", [""])[0],
-                "groups_header": json.marshal(array.concat(["system:authenticated"], sort(groups)))
+                "groups": groups,
+                "groups_header": groups_header(groups, org_id)
               }
             } else = {"authenticated": false}
+
+            identity_safe {
+              identity.authenticated
+              organization.org_id != ""
+              regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", organization.org_id)
+              is_array(identity.groups)
+              count(identity.groups) <= 128
+              count({group | group := identity.groups[_]}) == count(identity.groups)
+              count(unsafe_group) == 0
+            }
+
+            unsafe_group[group] {
+              group := identity.groups[_]
+              not is_string(group)
+            }
+
+            unsafe_group[group] {
+              group := identity.groups[_]
+              is_string(group)
+              not regex.match("^[A-Za-z0-9:#._/ -]+$", group)
+            }
+
+            unsafe_group[group] {
+              group := identity.groups[_]
+              is_string(group)
+              regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}/", group)
+            }
+
+            unsafe_group[group] {
+              group := identity.groups[_]
+              is_string(group)
+              encoded := base64.encode(group)
+              count(encoded) > 344
+            }
+
+            unsafe_group[group] {
+              group := identity.groups[_]
+              is_string(group)
+              encoded := base64.encode(group)
+              count(encoded) == 344
+              not regex.match("==$", encoded)
+            }
       require-auth:
         priority: 1
         patternMatching:

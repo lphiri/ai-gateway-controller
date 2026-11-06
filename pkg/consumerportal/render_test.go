@@ -418,7 +418,7 @@ func TestRenderBuildsAuthPolicies(t *testing.T) {
 	for _, want := range []string{
 		"x-forwarded-id-token",
 		"/oauth2/start?rd=",
-		"allow = true",
+		"identity_safe",
 		"login_location := sprintf",
 		"urlquery.encode(input.context.request.http.path)",
 		"{200, 202}[response.status_code]",
@@ -456,6 +456,47 @@ func TestRenderBuildsAuthPolicies(t *testing.T) {
 	}
 	if !strings.Contains(location, "login_location") || !strings.Contains(location, "/oauth2/start?rd=%2Fmaas-portal%2F") {
 		t.Errorf("session redirect expression = %q, want login_location with fallback", location)
+	}
+}
+
+func TestRenderQualifiesPortalGroups(t *testing.T) {
+	resources := renderTestResources(t)
+	session := findResource(t, resources, "AuthPolicy", "maas-consumer-portal-session")
+	rego, _, _ := unstructured.NestedString(session.Object,
+		"spec", "rules", "authorization", "session-and-identity", "opa", "rego")
+	for _, want := range []string{
+		`groups_header(groups, org_id)`,
+		`sprintf("%s/%s", [org_id, group])`,
+	} {
+		if !strings.Contains(rego, want) {
+			t.Errorf("session AuthPolicy missing %q", want)
+		}
+	}
+	if got := strings.Count(rego, `"groups_header": groups_header(groups, org_id)`); got != 2 {
+		t.Errorf("qualified groups used %d times, want 2", got)
+	}
+}
+
+func TestRenderValidatesPortalGroups(t *testing.T) {
+	resources := renderTestResources(t)
+	session := findResource(t, resources, "AuthPolicy", "maas-consumer-portal-session")
+	rego, _, _ := unstructured.NestedString(session.Object,
+		"spec", "rules", "authorization", "session-and-identity", "opa", "rego")
+	for _, want := range []string{
+		`groups_header(groups, org_id) := header`,
+		`regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", organization.org_id)`,
+		`count(identity.groups) <= 128`,
+		`count({group | group := identity.groups[_]}) == count(identity.groups)`,
+		`regex.match("^[A-Za-z0-9:#._/ -]+$", group)`,
+		`regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}/", group)`,
+		`base64.encode(group)`,
+		`allow {
+  identity_safe
+}`,
+	} {
+		if !strings.Contains(rego, want) {
+			t.Errorf("session AuthPolicy missing %q", want)
+		}
 	}
 }
 
