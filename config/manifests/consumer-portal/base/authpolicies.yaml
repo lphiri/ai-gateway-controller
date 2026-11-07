@@ -99,15 +99,19 @@ spec:
               ]
               username := usernames[0]
               authorization := input.context.request.http.headers.authorization
-              # MS-0007: groups are plain, unqualified names; they are
-              # forwarded as-is (trim/sort, system:authenticated prepended).
-              # TODO(MS-0007): the ADR is silent on the system:authenticated
-              # prepend and the sort/trim normalization — confirm whether the
-              # header should carry the literal groups claim instead.
+              org_id := object.get(claims, "org_id", "")
+              # MS-0007: group names are qualified with the organization ID.
+              # An empty organization ID leaves a group name unqualified. The
+              # header is trimmed, sorted, and system:authenticated is prepended.
+              # TODO(MS-0007): update the ADR for the system:authenticated
+              # prepend and the trim and sort normalization.
               groups := {trim_space(group) |
                 group := object.get(claims, "groups", [])[_]
                 trim_space(group) != ""
                 trim_space(group) != "system:authenticated"
+              }
+              group_header_values := {trim_prefix(sprintf("%s/%s", [org_id, group]), "/") |
+                group := groups[_]
               }
               result := {
                 "authenticated": true,
@@ -117,7 +121,7 @@ spec:
                 "id_token": trim_prefix(authorization, "Bearer "),
                 "username": username,
                 "email": object.get(claims, "email", ""),
-                "groups_header": json.marshal(array.concat(["system:authenticated"], sort(groups)))
+                "groups_header": json.marshal(array.concat(["system:authenticated"], sort(group_header_values)))
               }
             } else = result {
               input.auth.identity.anonymous
@@ -147,10 +151,15 @@ spec:
               ]
               username := usernames[0]
               token != ""
+              [_, claims, _] := io.jwt.decode(token)
+              org_id := object.get(claims, "org_id", "")
               groups := {trim_space(group) |
                 group := split(object.get(response.headers, "x-auth-request-groups", [""])[0], ",")[_]
                 trim_space(group) != ""
                 trim_space(group) != "system:authenticated"
+              }
+              group_header_values := {trim_prefix(sprintf("%s/%s", [org_id, group]), "/") |
+                group := groups[_]
               }
               result := {
                 "authenticated": true,
@@ -160,9 +169,10 @@ spec:
                 "id_token": token,
                 "username": username,
                 "email": object.get(response.headers, "x-auth-request-email", [""])[0],
-                "groups_header": json.marshal(array.concat(["system:authenticated"], sort(groups)))
+                "groups_header": json.marshal(array.concat(["system:authenticated"], sort(group_header_values)))
               }
             } else = {"authenticated": false}
+
       require-auth:
         priority: 1
         patternMatching:
@@ -185,30 +195,36 @@ spec:
           authorization:
             plain:
               expression: auth.authorization['session-and-identity'].identity.authorization
-          x-maas-username:
+          cookie:
+            plain:
+              expression: auth.authorization['session-and-identity'].application_cookies
+          x-auth-request-email:
+            plain:
+              expression: auth.authorization['session-and-identity'].identity.email
+          x-auth-request-user:
             plain:
               expression: auth.authorization['session-and-identity'].identity.username
+          x-forwarded-access-token:
+            plain:
+              expression: auth.authorization['session-and-identity'].identity.id_token
+          x-forwarded-id-token:
+            plain:
+              expression: auth.authorization['session-and-identity'].identity.id_token
           x-maas-group:
             plain:
               expression: auth.authorization['session-and-identity'].identity.groups_header
+          x-maas-organization-id:
+            plain:
+              expression: auth.authorization['session-and-identity'].organization.org_id
           x-maas-orgid:
             plain:
               expression: auth.authorization['session-and-identity'].organization.org_id
           x-maas-roles:
             plain:
               expression: auth.authorization['session-and-identity'].organization.roles_header
-          x-auth-request-user:
+          x-maas-username:
             plain:
               expression: auth.authorization['session-and-identity'].identity.username
-          x-auth-request-email:
-            plain:
-              expression: auth.authorization['session-and-identity'].identity.email
-          x-forwarded-id-token:
-            plain:
-              expression: auth.authorization['session-and-identity'].identity.id_token
-          cookie:
-            plain:
-              expression: auth.authorization['session-and-identity'].application_cookies
       unauthenticated:
         code: 401
         message:

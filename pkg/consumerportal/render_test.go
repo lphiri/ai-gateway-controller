@@ -410,6 +410,14 @@ func TestRenderBuildsAuthPolicies(t *testing.T) {
 	if sessionTarget != PortalRouteName || session.GetNamespace() != testInfraNamespace {
 		t.Errorf("session AuthPolicy target = %s in %s", sessionTarget, session.GetNamespace())
 	}
+	browserRule, found, err := unstructured.NestedMap(session.Object,
+		"spec", "rules", "authentication", "browser")
+	if !found || err != nil {
+		t.Fatalf("browser authentication rule not found: found=%t err=%v", found, err)
+	}
+	if _, found := browserRule["anonymous"]; !found {
+		t.Error("browser authentication rule must use anonymous access")
+	}
 	wantProxyURL := "https://" + AuthProxyName + "." + testInfraNamespace + ".svc.cluster.local:4180/oauth2/auth"
 	if !strings.Contains(rego, `"url": "`+wantProxyURL+`"`) || !strings.Contains(string(raw), `"code":302`) {
 		t.Errorf("session AuthPolicy proxy URL or redirect is wrong: url present=%t",
@@ -417,8 +425,11 @@ func TestRenderBuildsAuthPolicies(t *testing.T) {
 	}
 	for _, want := range []string{
 		"x-forwarded-id-token",
+		"x-forwarded-access-token",
+		"x-maas-organization-id",
 		"/oauth2/start?rd=",
 		"allow = true",
+		"is_array(roles)",
 		"login_location := sprintf",
 		"urlquery.encode(input.context.request.http.path)",
 		"{200, 202}[response.status_code]",
@@ -456,6 +467,26 @@ func TestRenderBuildsAuthPolicies(t *testing.T) {
 	}
 	if !strings.Contains(location, "login_location") || !strings.Contains(location, "/oauth2/start?rd=%2Fmaas-portal%2F") {
 		t.Errorf("session redirect expression = %q, want login_location with fallback", location)
+	}
+}
+
+func TestRenderNormalizesAndQualifiesPortalGroups(t *testing.T) {
+	resources := renderTestResources(t)
+	session := findResource(t, resources, "AuthPolicy", "maas-consumer-portal-session")
+	rego, _, _ := unstructured.NestedString(session.Object,
+		"spec", "rules", "authorization", "session-and-identity", "opa", "rego")
+	for _, want := range []string{
+		`groups := {trim_space(group) |`,
+		`trim_space(group) != "system:authenticated"`,
+		`group_header_values := {trim_prefix(sprintf("%s/%s", [org_id, group]), "/")`,
+		`json.marshal(array.concat(["system:authenticated"], sort(group_header_values)))`,
+	} {
+		if !strings.Contains(rego, want) {
+			t.Errorf("session AuthPolicy missing %q", want)
+		}
+	}
+	if got := strings.Count(rego, `group_header_values := {trim_prefix`); got != 2 {
+		t.Errorf("normalized groups used %d times, want 2", got)
 	}
 }
 
