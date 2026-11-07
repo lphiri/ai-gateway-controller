@@ -484,11 +484,11 @@ func TestRenderValidatesPortalGroups(t *testing.T) {
 		"spec", "rules", "authorization", "session-and-identity", "opa", "rego")
 	for _, want := range []string{
 		`groups_header(groups, org_id) := header`,
-		`regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", organization.org_id)`,
+		`regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", org_id)`,
 		`count(identity.groups) <= 128`,
 		`count({group | group := identity.groups[_]}) == count(identity.groups)`,
 		`regex.match("^[A-Za-z0-9:#._/ -]+$", group)`,
-		`regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}/", group)`,
+		`regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/", group)`,
 		`base64.encode(group)`,
 		`allow {
   identity_safe
@@ -496,6 +496,29 @@ func TestRenderValidatesPortalGroups(t *testing.T) {
 	} {
 		if !strings.Contains(rego, want) {
 			t.Errorf("session AuthPolicy missing %q", want)
+		}
+	}
+}
+
+func TestRenderAllowsLegacyPortalGroups(t *testing.T) {
+	resources := renderTestResources(t)
+	session := findResource(t, resources, "AuthPolicy", "maas-consumer-portal-session")
+	rego, _, _ := unstructured.NestedString(session.Object,
+		"spec", "rules", "authorization", "session-and-identity", "opa", "rego")
+	for _, want := range []string{
+		`organization_has_org_id {
+  object.keys(organization_claims)[_] == "org_id"
+}`,
+		`identity_safe {
+  identity.authenticated
+  not organization_has_org_id
+  is_array(identity.groups)
+  count(identity.groups) <= 128
+  count(unsafe_group) == 0
+}`,
+	} {
+		if !strings.Contains(rego, want) {
+			t.Errorf("session AuthPolicy missing legacy OIDC rule %q", want)
 		}
 	}
 }

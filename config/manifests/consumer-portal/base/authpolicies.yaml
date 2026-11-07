@@ -74,7 +74,6 @@ spec:
               is_string(org_id)
               org_id != ""
               roles := object.get(organization_claims, "roles", [])
-              is_array(roles)
               result := {
                 "org_id": org_id,
                 "roles_header": json.marshal(roles)
@@ -175,12 +174,26 @@ spec:
 
             identity_safe {
               identity.authenticated
-              organization.org_id != ""
-              regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", organization.org_id)
+              organization_has_org_id
+              org_id := object.get(organization_claims, "org_id", "")
+              is_string(org_id)
+              regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", org_id)
               is_array(identity.groups)
               count(identity.groups) <= 128
               count({group | group := identity.groups[_]}) == count(identity.groups)
               count(unsafe_group) == 0
+            }
+
+            identity_safe {
+              identity.authenticated
+              not organization_has_org_id
+              is_array(identity.groups)
+              count(identity.groups) <= 128
+              count(unsafe_group) == 0
+            }
+
+            organization_has_org_id {
+              object.keys(organization_claims)[_] == "org_id"
             }
 
             unsafe_group[group] {
@@ -197,7 +210,7 @@ spec:
             unsafe_group[group] {
               group := identity.groups[_]
               is_string(group)
-              regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}/", group)
+              regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/", group)
             }
 
             unsafe_group[group] {
