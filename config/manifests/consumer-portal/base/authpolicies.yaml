@@ -73,10 +73,10 @@ spec:
             } else = {}
 
             base_claims := {
-              "iss": identity_claims.iss,
-              "sub": identity_claims.sub,
-              "aud": identity_claims.aud,
-              "azp": identity_claims.azp,
+              "iss": object.get(identity_claims, "iss", ""),
+              "sub": object.get(identity_claims, "sub", ""),
+              "aud": object.get(identity_claims, "aud", ""),
+              "azp": object.get(identity_claims, "azp", ""),
               "name": object.get(identity_claims, "name", ""),
               "given_name": object.get(identity_claims, "given_name", ""),
               "family_name": object.get(identity_claims, "family_name", ""),
@@ -86,9 +86,10 @@ spec:
             }
 
             forwarded_claims = claims {
-              object.keys(identity_claims)[_] == "org_id"
+              org_id := object.get(identity_claims, "org_id", null)
+              is_string(org_id)
               claims := object.union(base_claims, {
-                "org_id": identity_claims.org_id,
+                "org_id": org_id,
                 "org_name": object.get(identity_claims, "org_name", ""),
                 "roles": object.get(identity_claims, "roles", [])
               })

@@ -469,10 +469,14 @@ func TestRenderForwardsRawPortalClaims(t *testing.T) {
 	rego, _, _ := unstructured.NestedString(session.Object,
 		"spec", "rules", "authorization", "session-and-identity", "opa", "rego")
 	for _, want := range []string{
-		`"iss": identity_claims.iss`,
-		`"sub": identity_claims.sub`,
+		`"iss": object.get(identity_claims, "iss", "")`,
+		`"sub": object.get(identity_claims, "sub", "")`,
+		`"aud": object.get(identity_claims, "aud", "")`,
+		`"azp": object.get(identity_claims, "azp", "")`,
 		`"groups": object.get(identity_claims, "groups", [])`,
-		`"org_id": identity_claims.org_id`,
+		`org_id := object.get(identity_claims, "org_id", null)`,
+		`is_string(org_id)`,
+		`"org_id": org_id`,
 		`"org_name": object.get(identity_claims, "org_name", "")`,
 		`"roles": object.get(identity_claims, "roles", [])`,
 	} {
