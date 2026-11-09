@@ -50,8 +50,13 @@ spec:
               - x-forwarded-email
               - x-forwarded-groups
               - x-forwarded-preferred-username
+              - x-maas-group
               - x-maas-keyname
+              - x-maas-organization-id
+              - x-maas-orgid
+              - x-maas-roles
               - x-maas-subscription-rate-limit-id
+              - x-maas-username
         - type: ResponseHeaderModifier
           responseHeaderModifier:
             set:

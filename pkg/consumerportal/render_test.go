@@ -311,13 +311,13 @@ func TestRenderStripsClientIdentityHeaders(t *testing.T) {
 			}
 		}
 	}
-	// Headers the AuthPolicy does not inject; the four x-maas-* identity
-	// headers and the other policy-injected headers are overwritten by the
-	// AuthPolicy instead (the route filter runs after the auth mutation).
+	// Headers the AuthPolicy does not inject. Policy-injected headers are
+	// overwritten after this route filter, so they must not be removed here.
 	want := []string{
 		"x-auth-request-preferred-username", "x-auth-request-groups", "x-auth-request-access-token",
 		"x-forwarded-user", "x-forwarded-email", "x-forwarded-groups", "x-forwarded-preferred-username",
-		"x-maas-keyname", "x-maas-subscription-rate-limit-id",
+		"x-maas-group", "x-maas-keyname", "x-maas-organization-id", "x-maas-orgid",
+		"x-maas-roles", "x-maas-subscription-rate-limit-id", "x-maas-username",
 	}
 	if len(removed) != len(want) {
 		t.Fatalf("strip list = %v, want %v", removed, want)
