@@ -415,8 +415,9 @@ func TestRenderBuildsAuthPolicies(t *testing.T) {
 	if !found || err != nil {
 		t.Fatalf("browser authentication rule not found: found=%t err=%v", found, err)
 	}
-	if _, found := browserRule["anonymous"]; !found {
-		t.Error("browser authentication rule must use anonymous access")
+	anonymousRule, ok := browserRule["anonymous"].(map[string]any)
+	if !ok || len(anonymousRule) != 0 {
+		t.Errorf("browser authentication anonymous = %#v, want empty object", browserRule["anonymous"])
 	}
 	wantProxyURL := "https://" + AuthProxyName + "." + testInfraNamespace + ".svc.cluster.local:4180/oauth2/auth"
 	if !strings.Contains(rego, `"url": "`+wantProxyURL+`"`) || !strings.Contains(string(raw), `"code":302`) {
