@@ -64,31 +64,37 @@ spec:
               not startswith(name, "_maas_consumer_proxy")
             ])
 
-            # MS-0007 flattened contract: the organization identity is carried
-            # as flat scalar/array claims (org_id, org_name, roles), not the
-            # superseded https://redhat.com/maas/orgs array-of-objects.
-            organization = result {
-              org_id := object.get(organization_claims, "org_id", "")
-              is_string(org_id)
-              org_id != ""
-              roles := object.get(organization_claims, "roles", [])
-              is_array(roles)
-              result := {
-                "org_id": org_id,
-                "roles_header": json.marshal(roles)
-              }
-            } else = {"org_id": "", "roles_header": "[]"}
-
-            # The claims object is passed through whole, so the flat
-            # org_id/org_name/roles claims are read the same way on both the
-            # Authorino-validated path and the decoded-token path.
-            organization_claims = claims {
+            identity_claims = claims {
               not input.auth.identity.anonymous
               claims := input.auth.identity
             } else = claims {
               identity.authenticated
               [_, claims, _] := io.jwt.decode(identity.id_token)
             } else = {}
+
+            base_claims := {
+              "iss": identity_claims.iss,
+              "sub": identity_claims.sub,
+              "aud": identity_claims.aud,
+              "azp": identity_claims.azp,
+              "name": object.get(identity_claims, "name", ""),
+              "given_name": object.get(identity_claims, "given_name", ""),
+              "family_name": object.get(identity_claims, "family_name", ""),
+              "preferred_username": object.get(identity_claims, "preferred_username", ""),
+              "email": object.get(identity_claims, "email", ""),
+              "groups": object.get(identity_claims, "groups", [])
+            }
+
+            forwarded_claims = claims {
+              object.keys(identity_claims)[_] == "org_id"
+              claims := object.union(base_claims, {
+                "org_id": identity_claims.org_id,
+                "org_name": object.get(identity_claims, "org_name", ""),
+                "roles": object.get(identity_claims, "roles", [])
+              })
+            } else = base_claims
+
+            identity_header := json.marshal({"source": "oidc", "claims": forwarded_claims})
 
             identity = result {
               not input.auth.identity.anonymous
@@ -99,20 +105,6 @@ spec:
               ]
               username := usernames[0]
               authorization := input.context.request.http.headers.authorization
-              org_id := object.get(claims, "org_id", "")
-              # MS-0007: group names are qualified with the organization ID.
-              # An empty organization ID leaves a group name unqualified. The
-              # header is trimmed, sorted, and system:authenticated is prepended.
-              # TODO(MS-0007): update the ADR for the system:authenticated
-              # prepend and the trim and sort normalization.
-              groups := {trim_space(group) |
-                group := object.get(claims, "groups", [])[_]
-                trim_space(group) != ""
-                trim_space(group) != "system:authenticated"
-              }
-              group_header_values := {trim_prefix(sprintf("%s/%s", [org_id, group]), "/") |
-                group := groups[_]
-              }
               result := {
                 "authenticated": true,
                 "authorization": authorization,
@@ -120,8 +112,7 @@ spec:
                 # x-forwarded-id-token (MS-0007).
                 "id_token": trim_prefix(authorization, "Bearer "),
                 "username": username,
-                "email": object.get(claims, "email", ""),
-                "groups_header": json.marshal(array.concat(["system:authenticated"], sort(group_header_values)))
+                "email": object.get(claims, "email", "")
               }
             } else = result {
               input.auth.identity.anonymous
@@ -151,16 +142,6 @@ spec:
               ]
               username := usernames[0]
               token != ""
-              [_, claims, _] := io.jwt.decode(token)
-              org_id := object.get(claims, "org_id", "")
-              groups := {trim_space(group) |
-                group := split(object.get(response.headers, "x-auth-request-groups", [""])[0], ",")[_]
-                trim_space(group) != ""
-                trim_space(group) != "system:authenticated"
-              }
-              group_header_values := {trim_prefix(sprintf("%s/%s", [org_id, group]), "/") |
-                group := groups[_]
-              }
               result := {
                 "authenticated": true,
                 # The verified token replaces any client-supplied value on
@@ -168,8 +149,7 @@ spec:
                 "authorization": concat("", ["Bearer ", token]),
                 "id_token": token,
                 "username": username,
-                "email": object.get(response.headers, "x-auth-request-email", [""])[0],
-                "groups_header": json.marshal(array.concat(["system:authenticated"], sort(group_header_values)))
+                "email": object.get(response.headers, "x-auth-request-email", [""])[0]
               }
             } else = {"authenticated": false}
 
@@ -210,21 +190,9 @@ spec:
           x-forwarded-id-token:
             plain:
               expression: auth.authorization['session-and-identity'].identity.id_token
-          x-maas-group:
+          x-maas-identity:
             plain:
-              expression: auth.authorization['session-and-identity'].identity.groups_header
-          x-maas-organization-id:
-            plain:
-              expression: auth.authorization['session-and-identity'].organization.org_id
-          x-maas-orgid:
-            plain:
-              expression: auth.authorization['session-and-identity'].organization.org_id
-          x-maas-roles:
-            plain:
-              expression: auth.authorization['session-and-identity'].organization.roles_header
-          x-maas-username:
-            plain:
-              expression: auth.authorization['session-and-identity'].identity.username
+              expression: auth.authorization['session-and-identity'].identity_header
       unauthenticated:
         code: 401
         message:

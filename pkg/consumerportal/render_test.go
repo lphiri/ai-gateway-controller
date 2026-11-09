@@ -426,10 +426,9 @@ func TestRenderBuildsAuthPolicies(t *testing.T) {
 	for _, want := range []string{
 		"x-forwarded-id-token",
 		"x-forwarded-access-token",
-		"x-maas-organization-id",
+		"x-maas-identity",
 		"/oauth2/start?rd=",
 		"allow = true",
-		"is_array(roles)",
 		"login_location := sprintf",
 		"urlquery.encode(input.context.request.http.path)",
 		"{200, 202}[response.status_code]",
@@ -440,17 +439,10 @@ func TestRenderBuildsAuthPolicies(t *testing.T) {
 		// their values: the test issuer appears in the JWT rule and the
 		// client-bound azp predicate, and the client id in the latter.
 		"issuerUrl\":\"https://keycloak.apps.example.com/realms/tenant-a",
-		"x-maas-username",
-		"x-maas-group",
-		"x-maas-orgid",
-		"x-maas-roles",
 		"azp == 'test-client",
 		"io.jwt.decode",
-		// RHAI-10610: the flattened MS-0007 contract reads flat scalar
-		// organization claims instead of the orgs array-of-objects.
-		`object.get(organization_claims, "org_id", "")`,
-		`object.get(organization_claims, "roles", [])`,
-		"system:authenticated",
+		`identity_claims = claims`,
+		`json.marshal({"source": "oidc", "claims": forwarded_claims})`,
 		"application_cookies",
 		"_maas_consumer_proxy",
 		"Invalid bearer token",
@@ -470,23 +462,55 @@ func TestRenderBuildsAuthPolicies(t *testing.T) {
 	}
 }
 
-func TestRenderNormalizesAndQualifiesPortalGroups(t *testing.T) {
+func TestRenderForwardsRawPortalClaims(t *testing.T) {
 	resources := renderTestResources(t)
 	session := findResource(t, resources, "AuthPolicy", "maas-consumer-portal-session")
 	rego, _, _ := unstructured.NestedString(session.Object,
 		"spec", "rules", "authorization", "session-and-identity", "opa", "rego")
 	for _, want := range []string{
-		`groups := {trim_space(group) |`,
-		`trim_space(group) != "system:authenticated"`,
-		`group_header_values := {trim_prefix(sprintf("%s/%s", [org_id, group]), "/")`,
-		`json.marshal(array.concat(["system:authenticated"], sort(group_header_values)))`,
+		`"iss": identity_claims.iss`,
+		`"sub": identity_claims.sub`,
+		`"groups": object.get(identity_claims, "groups", [])`,
+		`"org_id": identity_claims.org_id`,
+		`"org_name": object.get(identity_claims, "org_name", "")`,
+		`"roles": object.get(identity_claims, "roles", [])`,
 	} {
 		if !strings.Contains(rego, want) {
 			t.Errorf("session AuthPolicy missing %q", want)
 		}
 	}
-	if got := strings.Count(rego, `group_header_values := {trim_prefix`); got != 2 {
-		t.Errorf("normalized groups used %d times, want 2", got)
+	for _, unwanted := range []string{
+		"organization_claims",
+		"group_header_values",
+		"system:authenticated",
+	} {
+		if strings.Contains(rego, unwanted) {
+			t.Errorf("session AuthPolicy must not contain %q", unwanted)
+		}
+	}
+	successHeaders, found, err := unstructured.NestedMap(session.Object,
+		"spec", "rules", "response", "success", "headers")
+	if !found || err != nil {
+		t.Fatalf("success response headers not found: found=%t err=%v", found, err)
+	}
+	for _, unwanted := range []string{
+		"x-maas-username",
+		"x-maas-group",
+		"x-maas-organization-id",
+		"x-maas-orgid",
+		"x-maas-roles",
+	} {
+		if _, exists := successHeaders[unwanted]; exists {
+			t.Errorf("success response headers must not contain %q", unwanted)
+		}
+	}
+	identityHeader, ok := successHeaders["x-maas-identity"].(map[string]any)
+	if !ok {
+		t.Fatalf("success response headers missing x-maas-identity: %#v", successHeaders)
+	}
+	expression, _, _ := unstructured.NestedString(identityHeader, "plain", "expression")
+	if expression != "auth.authorization['session-and-identity'].identity_header" {
+		t.Errorf("x-maas-identity expression = %q", expression)
 	}
 }
 
